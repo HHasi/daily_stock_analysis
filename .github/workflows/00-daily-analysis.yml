@@ -553,9 +553,11 @@ jobs:
           PORTFOLIO_NAMES: "${{ vars.PORTFOLIO_NAMES || '🏛️沪深300,🤖AI,🌐纳指,📈创业板,🟡三安光电' }}"
           PORTFOLIO_MARKETS: "${{ vars.PORTFOLIO_MARKETS || 'sh,sz,sh,sz,sh' }}"
           PORTFOLIO_CASH: "${{ vars.PORTFOLIO_CASH || '4309' }}"
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
         run: |
-          python3 << 'PYEOF'
-          import json, os, requests
+          REPORT=$(python3 << 'PYEOF'
+          import json, os, requests, hashlib, base64, time
           codes = os.environ['PORTFOLIO_CODES'].split(',')
           qtys = [float(x) for x in os.environ['PORTFOLIO_QTY'].split(',')]
           costs = [float(x) for x in os.environ['PORTFOLIO_COST'].split(',')]
@@ -566,9 +568,9 @@ jobs:
           resp = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=10)
           resp.encoding = 'gbk'
           lines = [l.strip() for l in resp.text.strip().split(';') if l.strip()]
-          total_mv = 0
-          total_pl = 0
+          total_mv, total_pl = 0, 0
           rows = []
+          worst = ("", 0)
           for i, code in enumerate(codes):
               for line in lines:
                   if f"{markets[i]}{code}" in line:
@@ -581,23 +583,47 @@ jobs:
                       mv = price * qtys[i]
                       pl = (price - costs[i]) * qtys[i]
                       pl_pct = ((price - costs[i]) / costs[i]) * 100 if costs[i] else 0
-                      total_mv += mv
-                      total_pl += pl
+                      total_mv += mv; total_pl += pl
+                      if pl_pct < worst[1]: worst = (names[i], pl_pct)
                       arrow = '🔴' if pl < 0 else '🟢'
-                      rows.append(f"{arrow} {names[i]:<10} {int(qtys[i]):>4}份  {costs[i]:>7.3f}  {price:>7.3f}  {change_pct:>+5.2f}%  {mv:>7.0f}  {pl:>+7.0f} ({pl_pct:>+.1f}%)")
+                      rows.append(f"{arrow} {names[i]:<8} {int(qtys[i]):>4}份{str(costs[i]):>8}{price:>8.3f} {change_pct:>+5.2f}% {mv:>7.0f} {pl:>+7.0f}({pl_pct:>+.1f}%)")
                       break
-          total_pl_pct = (total_pl / (total_mv - total_pl)) * 100 if (total_mv - total_pl) else 0
+          total_pct = (total_pl / (total_mv - total_pl)) * 100 if (total_mv - total_pl) else 0
           total_assets = total_mv + cash
-          print()
-          print('━' * 50)
-          print('💰 持仓汇总')
-          print('━' * 50)
-          for r in rows: print(r)
-          print('─' * 50)
-          print(f"{'💰 合计':<20}{total_mv:>8.0f}  {total_pl:>+8.0f} ({total_pl_pct:>+.1f}%)")
-          print(f"{'💵 现金':<20}{cash:>8.0f}")
-          print(f"{'📊 总资产':<20}{total_assets:>8.0f}")
-          print(f"{'📌 仓位':<20}{total_mv/total_assets*100:>5.1f}%")
-          print('━' * 50)
+          lines_out = []
+          lines_out.append("━" * 45)
+          lines_out.append("💰 持仓汇总")
+          lines_out.append("━" * 45)
+          for r in rows: lines_out.append(r)
+          lines_out.append("─" * 45)
+          lines_out.append(f"💰 合计                   {total_mv:>8.0f}  {total_pl:>+8.0f}({total_pct:>+.1f}%)")
+          lines_out.append(f"💵 现金                    {cash:>8.0f}")
+          lines_out.append(f"📊 总资产                  {total_assets:>8.0f}")
+          lines_out.append(f"📌 仓位                 {total_mv/total_assets*100:>5.1f}%")
+          lines_out.append(f"⚠️ {worst[0]}亏损最深({worst[1]:.1f}%)")
+          lines_out.append("━" * 45)
+          print('
+'.join(lines_out))
           PYEOF
+          )
+          echo "$REPORT"
+          # Push to Feishu webhook
+          if [ -n "$FEISHU_WEBHOOK_URL" ]; then
+            TS=$(date +%s)
+            SIGN=""
+            if [ -n "$FEISHU_WEBHOOK_SECRET" ]; then
+              SIGN=$(echo -n "$TS" | openssl dgst -sha256 -hmac "$FEISHU_WEBHOOK_SECRET" | base64 -w0)
+            fi
+            curl -s -X POST "$FEISHU_WEBHOOK_URL"               -H "Content-Type: application/json"               -d "$(python3 -c "
+import json, os
+msg = os.environ.get('REPORT', '').replace('"', '\\"').replace('
+', '\\n')
+payload = {'msg_type': 'interactive', 'card': {
+    'header': {'title': {'tag': 'plain_text', 'content': '💰 持仓汇总'},
+               'template': 'red'},
+    'elements': [{'tag': 'markdown', 'content': os.environ.get('REPORT', '')}]
+}}
+print(json.dumps(payload))
+")" 2>/dev/null || echo "Feishu push skipped"
+          fi
 
