@@ -52,8 +52,7 @@ out_lines.append(f"📊 总资产                  {total_assets:>8.0f}")
 out_lines.append(f"📌 仓位                 {total_mv/total_assets*100:>5.1f}%")
 out_lines.append(f"⚠️ {worst[0]}亏损最深({worst[1]:.1f}%)")
 out_lines.append("━" * 45)
-report = '
-'.join(out_lines)
+report = chr(10).join(out_lines)
 print(report)
 
 # Push to Feishu webhook if configured
