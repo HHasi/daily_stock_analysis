@@ -544,3 +544,69 @@ jobs:
             echo "📜 最近日志（最后 30 行）:"
             tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
           fi
+
+      - name: 💰 持仓汇总
+        env:
+          PORTFOLIO_QTY: "${{ vars.PORTFOLIO_QTY || '1000,900,1000,500,600' }}"
+          PORTFOLIO_COST: "${{ vars.PORTFOLIO_COST || '4.795,2.029,2.188,3.828,14.20' }}"
+          PORTFOLIO_CODES: "${{ vars.PORTFOLIO_CODES || '510300,159819,513100,159915,600703' }}"
+          PORTFOLIO_NAMES: "${{ vars.PORTFOLIO_NAMES || '🏛️沪深300,🤖AI,🌐纳指,📈创业板,🟡三安光电' }}"
+          PORTFOLIO_MARKETS: "${{ vars.PORTFOLIO_MARKETS || 'sh,sz,sh,sz,sh' }}"
+          PORTFOLIO_CASH: "${{ vars.PORTFOLIO_CASH || '4309' }}"
+        run: |
+          python3 -c """
+import json, os, requests
+
+codes = os.environ['PORTFOLIO_CODES'].split(',')
+qtys = [float(x) for x in os.environ['PORTFOLIO_QTY'].split(',')]
+costs = [float(x) for x in os.environ['PORTFOLIO_COST'].split(',')]
+names = os.environ['PORTFOLIO_NAMES'].split(',')
+markets = os.environ['PORTFOLIO_MARKETS'].split(',')
+cash = float(os.environ.get('PORTFOLIO_CASH', '0'))
+
+symbols = ','.join(f"{m}{c}" for m, c in zip(markets, codes))
+resp = requests.get(f"http://qt.gtimg.cn/q={symbols}", timeout=10)
+resp.encoding = 'gbk'
+
+lines = [l.strip() for l in resp.text.strip().split(';') if l.strip()]
+total_mv = 0
+total_pl = 0
+rows = []
+
+for i, code in enumerate(codes):
+    for line in lines:
+        if f"{markets[i]}{code}" in line:
+            fields = line.split('~')
+            if len(fields) < 40:
+                continue
+            try:
+                price = float(fields[3])
+                change_pct = float(fields[32])
+            except (ValueError, IndexError):
+                continue
+            mv = price * qtys[i]
+            pl = (price - costs[i]) * qtys[i]
+            pl_pct = ((price - costs[i]) / costs[i]) * 100 if costs[i] else 0
+            total_mv += mv
+            total_pl += pl
+            arrow = '🔴' if pl < 0 else '🟢' if pl > 0 else '⚪'
+            rows.append(f"{arrow} {names[i]:<10} {int(qtys[i]):>4}份  {costs[i]:>7.3f}  {price:>7.3f}  {change_pct:>+5.2f}%  {mv:>7.0f}  {pl:>+7.0f} ({pl_pct:>+.1f}%)")
+            break
+
+total_pl_pct = (total_pl / (total_mv - total_pl)) * 100 if (total_mv - total_pl) else 0
+total_assets = total_mv + cash
+
+print()
+print('━' * 50)
+print('💰 持仓汇总')
+print('━' * 50)
+for r in rows:
+    print(r)
+print('─' * 50)
+print(f"{'💰 合计':<20}{total_mv:>8.0f}  {total_pl:>+8.0f} ({total_pl_pct:>+.1f}%)")
+print(f"{'💵 现金':<20}{cash:>8.0f}")
+print(f"{'📊 总资产':<20}{total_assets:>8.0f}")
+print(f"{'📌 仓位':<20}{total_mv/total_assets*100:>5.1f}%")
+print('━' * 50)
+"""
+
